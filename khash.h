@@ -211,8 +211,6 @@ khash_hash_aligned32(u32 _u32[], int l_u32)
 /*
  * KHASH manipulation API - Consolidated
  */
-
-
 typedef struct khash_t khash_t;
 
 khash_t *khash_init(uint32_t bck_size);
@@ -222,8 +220,7 @@ void     khash_flush(khash_t *khash);
 int      khash_size(khash_t *khash);
 int      khash_addentry(khash_t *khash, khash_key_t hash, void *val, gfp_t gfp);
 int      khash_rementry(khash_t *khash, khash_key_t hash, void **retval);
-int      khash_lookup(khash_t *khash, khash_key_t hash, void **retval);
-int      khash_lookup2(khash_t *khash, khash_key_t *hash, void **retval);
+int      khash_lookup(khash_t *khash, khash_key_t *hash, void **retval);
 
 typedef  int(*khfunc)(khash_key_t hash, void *value, void *user_data);
 void     khash_foreach(khash_t *khash, khfunc func, void *data);
@@ -248,21 +245,7 @@ khash_proc_interator(khash_key_t hash, void *value, void *user_data)
 }
 
 /*
- * ITEM manipulation API - Don't relay on that, they might be removed.
- */
-typedef struct {
-	struct rcu_head rcu;
-	struct hlist_node hh;
-	khash_key_t hash;
-	void *value;
-} khash_item_t;
-
-khash_item_t *khash_item_new(khash_key_t hash, void *value, gfp_t flags);
-void          khash_item_del(khash_item_t *item);
-int           khash_add_item(khash_t *khash, khash_item_t *item);
-
-/*
- * Stats API - Experimental!!! Don't relay on that, they might be removed.
+ * Stats API - Experimental!!! Don't relay on them, they could be removed.
  */
 #define PRECISION 1000
 #define MAX_STATISTICAL_MODE 25

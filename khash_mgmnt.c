@@ -36,63 +36,6 @@
 #include "khash.h"
 #include "khash_internal.h"
 
-khash_item_t *
-khash_item_new(khash_key_t hash, void *value, gfp_t flags)
-{
-	khash_item_t *item = NULL;
-
-	item = kzalloc(sizeof(khash_item_t), flags);
-	if (!item)
-		return (NULL);
-
-	item->hash = hash;
-	item->value = value;
-
-	return (item);
-}
-EXPORT_SYMBOL(khash_item_new);
-
-void
-khash_item_del(khash_item_t *item)
-{
-	if (unlikely(!item))
-		return;
-
-	kfree(item);
-}
-EXPORT_SYMBOL(khash_item_del);
-
-__always_inline static void *
-khash_item_value_get(khash_item_t *item)
-{
-	if (unlikely(!item))
-		return (NULL);
-
-	return (item->value);
-}
-
-__always_inline static int
-khash_item_key_get(khash_item_t *item, khash_key_t *key)
-{
-	if (unlikely(!item || !key))
-		return (-1);
-
-	*key = item->hash;
-
-	return (0);
-}
-
-__always_inline static int
-khash_item_value_set(khash_item_t *item, void *value)
-{
-	if (unlikely(!item))
-		return (-1);
-
-	item->value = value;
-
-	return (0);
-}
-
 #define khash_min(val, bits)							\
 	(sizeof(val) <= 4 ? hash_32(val, bits) : hash_long(val, bits))
 
@@ -130,9 +73,15 @@ khash_del_rcu(struct hlist_node *node)
 		}                                                                   \
 	} while (0)
 
+typedef struct {
+	struct rcu_head rcu;
+	struct hlist_node hh;
+	khash_key_t hash;
+	void *value;
+} khash_item_t;
 
 __always_inline static khash_item_t *
-__khash_lookup2(khash_t *kh, khash_key_t *hash)
+__khash_lookup(khash_t *kh, khash_key_t *hash)
 {
 	khash_item_t *item = NULL;
 	uint8_t found = 0;
@@ -259,7 +208,7 @@ khash_rementry(khash_t *khash, khash_key_t hash, void **retval)
 	if (!khash)
 		goto khash_rementry_fail;
 
-	item = __khash_lookup2(khash, &hash);
+	item = __khash_lookup(khash, &hash);
 	if (!item)
 		goto khash_rementry_fail;
 
@@ -278,7 +227,7 @@ khash_rementry_fail:
 }
 EXPORT_SYMBOL(khash_rementry);
 
-int
+__always_inline static int
 khash_add_item(khash_t *khash, khash_item_t *item)
 {
 	khash_item_t *old_item = NULL;
@@ -286,7 +235,7 @@ khash_add_item(khash_t *khash, khash_item_t *item)
 	if (!khash || !item)
 		return (-1);
 
-	old_item = __khash_lookup2(khash, &item->hash);
+	old_item = __khash_lookup(khash, &item->hash);
 	if (old_item)
 		return (-1);
 
@@ -297,9 +246,23 @@ khash_add_item(khash_t *khash, khash_item_t *item)
 
 	return (0);
 }
-EXPORT_SYMBOL(khash_add_item);
 
-int
+__always_inline static khash_item_t *
+khash_item_new(khash_key_t hash, void *value, gfp_t flags)
+{
+	khash_item_t *item = NULL;
+
+	item = kzalloc(sizeof(khash_item_t), flags);
+	if (!item)
+		return (NULL);
+
+	item->hash = hash;
+	item->value = value;
+
+	return (item);
+}
+
+__always_inline int
 khash_addentry(khash_t *khash, khash_key_t hash, void *value, gfp_t flags)
 {
 	khash_item_t *item = NULL;
@@ -318,17 +281,16 @@ khash_addentry(khash_t *khash, khash_key_t hash, void *value, gfp_t flags)
 
 	return (0);
 }
-EXPORT_SYMBOL(khash_addentry);
 
 int
-khash_lookup(khash_t *khash, khash_key_t hash, void **retval)
+khash_lookup(khash_t *khash, khash_key_t *hash, void **retval)
 {
 	khash_item_t *item = NULL;
 
 	if (unlikely(!khash))
 		goto khash_lookup_fail;
 
-	item = __khash_lookup2(khash, &hash);
+	item = __khash_lookup(khash, hash);
 	if (!item)
 		goto khash_lookup_fail;
 
@@ -344,31 +306,6 @@ khash_lookup_fail:
 	return (-1);
 }
 EXPORT_SYMBOL(khash_lookup);
-
-int
-khash_lookup2(khash_t *khash, khash_key_t *hash, void **retval)
-{
-	khash_item_t *item = NULL;
-
-	if (unlikely(!khash))
-		goto khash_lookup_fail;
-
-	item = __khash_lookup2(khash, hash);
-	if (!item)
-		goto khash_lookup_fail;
-
-	if (retval)
-		*retval = (rcu_dereference(item))->value;
-
-	return (0);
-
-khash_lookup_fail:
-	if (retval)
-		*retval = NULL;
-
-	return (-1);
-}
-EXPORT_SYMBOL(khash_lookup2);
 
 int
 khash_size(khash_t *khash)
@@ -498,11 +435,15 @@ khash_stats_get(khash_t *khash, khash_stats_t *stats)
 }
 EXPORT_SYMBOL(khash_stats_get);
 
+//#define SELF_TEST_VERBOSE
+
 static int
 foreach_test(khash_key_t hash, void *value, void *user_data)
 {
+#ifdef SELF_TEST_VERBOSE
 	printk("[KHASH] Key %llu %llu %llu\n",
 			hash.__key._64[0], hash.__key._64[1], hash.__key._64[2]);
+#endif
 
 	return (0);
 }
@@ -517,16 +458,16 @@ khash_self_test(uint32_t bck_size)
 	u32 p2 = 7;
 	void *res = NULL;
 
-	printk("[KHASH] Start self test\n");
-
 	k = khash_init(bck_size);
 	if (!k) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, hash allocation failure\n");
 		goto exit_failure;
 	}
 
+#ifdef SELF_TEST_VERBOSE
 	printk("[KHASH] Allocate hash table with %u buckets [using %u bits]\n",
 			k->bck_num, k->bits_num);
+#endif
 
 	__khash_hash_u160(&key, p0, p2);
 	if (khash_addentry(k, key, p0, GFP_ATOMIC) < 0) {
@@ -552,29 +493,31 @@ khash_self_test(uint32_t bck_size)
 		goto exit_failure;
 	}
 
-	printk("[KHASH] Added 4 entries, iterate and print hash keys\n");
+#ifdef SELF_TEST_VERBOSE
+	printk("[KHASH] Add 4 entries, iterate and print hash keys\n");
+#endif
 	khash_foreach(k, foreach_test, NULL);
 
 	__khash_hash_u160(&key, p0, p2);
-	if (khash_lookup2(k, &key, &res) < 0) {
+	if (khash_lookup(k, &key, &res) < 0) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, u128 lookup failed\n");
 		goto exit_failure;
 	}
 
 	__khash_hash_u128(&key, p0);
-	if (khash_lookup2(k, &key, &res) < 0) {
+	if (khash_lookup(k, &key, &res) < 0) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, u128 lookup failed\n");
 		goto exit_failure;
 	}
 
 	__khash_hash_u64(&key, p1);
-	if (khash_lookup2(k, &key, &res) < 0) {
+	if (khash_lookup(k, &key, &res) < 0) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, u64 lookup failed\n");
 		goto exit_failure;
 	}
 
 	__khash_hash_u32(&key, p2);
-	if (khash_lookup2(k, &key, &res) < 0) {
+	if (khash_lookup(k, &key, &res) < 0) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, u32 lookup failed\n");
 		goto exit_failure;
 	}
@@ -586,34 +529,41 @@ khash_self_test(uint32_t bck_size)
 	}
 
 	__khash_hash_u64(&key, p1);
-	if (!khash_lookup2(k, &key, &res)) {
+	if (!khash_lookup(k, &key, &res)) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, u64 present after remove\n");
 		goto exit_failure;
 	}
 
-	printk("[KHASH] Removed 1 entry, iterate and print hash keys\n");
+#ifdef SELF_TEST_VERBOSE
+	printk("[KHASH] Remove 1 entry, iterate and print hash keys\n");
+#endif
 	khash_foreach(k, foreach_test, NULL);
 
 	khash_flush(k);
 
 	__khash_hash_u128(&key, p0);
-	if (!khash_lookup2(k, &key, &res)) {
+	if (!khash_lookup(k, &key, &res)) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, u128 present after flush\n");
 		goto exit_failure;
 	}
 
-	printk("[KHASH] Flushed hash table, iterate and print hash keys\n");
+#ifdef SELF_TEST_VERBOSE
+	printk("[KHASH] Flush hash table, iterate and print hash keys\n");
+#endif
 	khash_foreach(k, foreach_test, NULL);
 
 	khash_term(k);
 
-	printk(KERN_INFO "[KHASH] Test succeed\n");
+#ifdef SELF_TEST_VERBOSE
+	printk("[KHASH] Release hash table memory\n");
+#endif
 
 	return (0);
 
 exit_failure:
 
-	printk(KERN_INFO "[KHASH] ERROR - Test failed\n");
+	printk(KERN_INFO "[KHASH] ERROR - Automatic tests failed, "
+			"in use memory released\n");
 
 	if (k) {
 		khash_flush(k);
@@ -628,6 +578,8 @@ khash_init_module(void)
 {
 	printk(KERN_INFO "[%s] module loaded\n", KHASH_VERSION_STR);
 
+	printk("[KHASH] Automatic tests started\n");
+
 	if (khash_self_test(15) < 0) {
 		printk(KERN_INFO "[%s] module unloaded\n", KHASH_VERSION_STR);
 		return (-ENOMEM);
@@ -637,6 +589,8 @@ khash_init_module(void)
 		printk(KERN_INFO "[%s] module unloaded\n", KHASH_VERSION_STR);
 		return (-ENOMEM);
 	}
+
+	printk("[KHASH] Automatic tests succeeded\n");
 
 	return (0);
 }
