@@ -24,31 +24,18 @@
 #ifndef KHASH_INTERNAL_H
 #define KHASH_INTERNAL_H
 
-#define DEFINE_KHASH_STRUCT(__bucket_size__)         \
-		uint32_t          count;                     \
-		uint8_t           ht_is_static;              \
-		uint8_t           ht_static_idx;             \
-		uint32_t          bck_size;                  \
-		uint32_t          ht_count[__bucket_size__]; \
-		struct hlist_head ht[__bucket_size__];
-
 /* Hash table size MUST be a power of 2 */
 #define KHASH_BCK_SIZE_16    (1 << 4)
 #define KHASH_BCK_SIZE_1k    (1 << 10)
 #define KHASH_BCK_SIZE_512k  (1 << 19)
 
 struct khash_t {
-	DEFINE_KHASH_STRUCT(KHASH_BCK_SIZE_16)
+	uint32_t          count;
+	uint8_t           ht_static_idx;
+	uint32_t          bck_num;
+	uint8_t           bits_num;
+	uint32_t          *ht_count; /* Array of bck_size length */
+	struct hlist_head *ht;       /* Array of bck_size length */
 };
-
-typedef struct khash_t khash_16_t;
-
-typedef struct {
-	DEFINE_KHASH_STRUCT(KHASH_BCK_SIZE_1k)
-} khash_1k_t;
-
-typedef struct {
-	DEFINE_KHASH_STRUCT(KHASH_BCK_SIZE_512k)
-} khash_512k_t;
 
 #endif
