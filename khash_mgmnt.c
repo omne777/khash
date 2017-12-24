@@ -443,14 +443,18 @@ khash_stats_get(khash_t *khash, khash_stats_t *stats)
 }
 EXPORT_SYMBOL(khash_stats_get);
 
-//#define SELF_TEST_VERBOSE
+#define SELF_TEST_VERBOSE
 
 static int
 foreach_test(khash_key_t hash, void *value, void *user_data)
 {
+	khash_t *k = user_data;
+
 #ifdef SELF_TEST_VERBOSE
-	printk("[KHASH] Key %llu %llu %llu\n",
-			hash.__key._64[0], hash.__key._64[1], hash.__key._64[2]);
+	printk("[KHASH] Key %llu %llu %llu with key %llX in position %llu\n",
+			hash.__key._64[0], hash.__key._64[1], hash.__key._64[2],
+			hash.key,
+			khash_min(hash.key, k->bits_num));
 #endif
 
 	return (0);
@@ -473,29 +477,31 @@ khash_self_test(uint32_t bck_size)
 	}
 
 #ifdef SELF_TEST_VERBOSE
-	printk("[KHASH] Allocate hash table with %u buckets [using %u bits]\n",
-			k->bck_num, k->bits_num);
+	printk("[KHASH] item size: %lu\n", sizeof(khash_item_t));
+	printk("[KHASH] Allocate hash table with %u buckets [using %u bits], "
+			"memory footprint: %llu Bytes\n",
+			k->bck_num, k->bits_num, khash_footprint(k));
 #endif
 
-	__khash_hash_u160(&key, p0, p2);
+	khash_hash_u160(&key, p0, p2);
+	if (khash_addentry(k, key, p0, GFP_ATOMIC) < 0) {
+		printk(KERN_INFO "[KHASH] ERROR - Test, u160 add failed\n");
+		goto exit_failure;
+	}
+
+	khash_hash_u128(&key, p0);
 	if (khash_addentry(k, key, p0, GFP_ATOMIC) < 0) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, u128 add failed\n");
 		goto exit_failure;
 	}
 
-	__khash_hash_u128(&key, p0);
-	if (khash_addentry(k, key, p0, GFP_ATOMIC) < 0) {
-		printk(KERN_INFO "[KHASH] ERROR - Test, u128 add failed\n");
-		goto exit_failure;
-	}
-
-	__khash_hash_u64(&key, p1);
+	khash_hash_u64(&key, p1);
 	if (khash_addentry(k, key, &p1, GFP_ATOMIC) < 0) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, u64 add failed\n");
 		goto exit_failure;
 	}
 
-	__khash_hash_u32(&key, p2);
+	khash_hash_u32(&key, p2);
 	if (khash_addentry(k, key, &p2, GFP_ATOMIC) < 0) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, u32 add failed\n");
 		goto exit_failure;
@@ -504,39 +510,39 @@ khash_self_test(uint32_t bck_size)
 #ifdef SELF_TEST_VERBOSE
 	printk("[KHASH] Add 4 entries, iterate and print hash keys\n");
 #endif
-	khash_foreach(k, foreach_test, NULL);
+	khash_foreach(k, foreach_test, k);
 
-	__khash_hash_u160(&key, p0, p2);
+	khash_hash_u160(&key, p0, p2);
+	if (khash_lookup(k, &key, &res) < 0) {
+		printk(KERN_INFO "[KHASH] ERROR - Test, u160 lookup failed\n");
+		goto exit_failure;
+	}
+
+	khash_hash_u128(&key, p0);
 	if (khash_lookup(k, &key, &res) < 0) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, u128 lookup failed\n");
 		goto exit_failure;
 	}
 
-	__khash_hash_u128(&key, p0);
-	if (khash_lookup(k, &key, &res) < 0) {
-		printk(KERN_INFO "[KHASH] ERROR - Test, u128 lookup failed\n");
-		goto exit_failure;
-	}
-
-	__khash_hash_u64(&key, p1);
+	khash_hash_u64(&key, p1);
 	if (khash_lookup(k, &key, &res) < 0) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, u64 lookup failed\n");
 		goto exit_failure;
 	}
 
-	__khash_hash_u32(&key, p2);
+	khash_hash_u32(&key, p2);
 	if (khash_lookup(k, &key, &res) < 0) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, u32 lookup failed\n");
 		goto exit_failure;
 	}
 
-	__khash_hash_u64(&key, p1);
+	khash_hash_u64(&key, p1);
 	if (khash_rementry(k, key, NULL) < 0) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, u64 remove failed\n");
 		goto exit_failure;
 	}
 
-	__khash_hash_u64(&key, p1);
+	khash_hash_u64(&key, p1);
 	if (!khash_lookup(k, &key, &res)) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, u64 present after remove\n");
 		goto exit_failure;
@@ -545,11 +551,11 @@ khash_self_test(uint32_t bck_size)
 #ifdef SELF_TEST_VERBOSE
 	printk("[KHASH] Remove 1 entry, iterate and print hash keys\n");
 #endif
-	khash_foreach(k, foreach_test, NULL);
+	khash_foreach(k, foreach_test, k);
 
 	khash_flush(k);
 
-	__khash_hash_u128(&key, p0);
+	khash_hash_u128(&key, p0);
 	if (!khash_lookup(k, &key, &res)) {
 		printk(KERN_INFO "[KHASH] ERROR - Test, u128 present after flush\n");
 		goto exit_failure;
@@ -558,7 +564,7 @@ khash_self_test(uint32_t bck_size)
 #ifdef SELF_TEST_VERBOSE
 	printk("[KHASH] Flush hash table, iterate and print hash keys\n");
 #endif
-	khash_foreach(k, foreach_test, NULL);
+	khash_foreach(k, foreach_test, k);
 
 	khash_term(k);
 
