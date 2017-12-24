@@ -36,8 +36,7 @@
 #include "khash.h"
 #include "khash_internal.h"
 
-#define khash_min(val, bits)							\
-	(sizeof(val) <= 4 ? hash_32(val, bits) : hash_long(val, bits))
+#define khash_min(val, bits) (val >> (64 - bits))
 
 #define khash_add_rcu(hashtable, bits_num, node, key)					\
 	hlist_add_head_rcu(node, &hashtable[khash_min(key, bits_num)])
@@ -46,6 +45,15 @@ static inline void
 khash_del_rcu(struct hlist_node *node)
 {
 	hlist_del_init_rcu(node);
+}
+
+__always_inline static int
+khash_key_match(khash_key_t *a, khash_key_t *b)
+{
+	if (a->key == b->key)
+		return (!memcmp(a->__key._64, b->__key._64, _64WORDS_NUM));
+
+	return (0);
 }
 
 #define khash_for_each_possible_rcu(name, bit_num, obj, member, key) \

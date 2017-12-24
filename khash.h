@@ -44,55 +44,40 @@
 
 #include <linux/jhash.h>
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,7,0)
-#define GOLDEN_RATIO_32 0x61C88647
-#define GOLDEN_RATIO_64 0x61C8864680B583EBull
+#define KHASH_GOLDEN_RATIO_32 0x61C88647
+#define KHASH_GOLDEN_RATIO_64 0x61C8864680B583EBull
 
 #ifndef HAVE_ARCH__HASH_32
-#define __hash_32 __hash_32_generic
+#define __khash_32 __khash_32_generic
 #endif
 static inline u32
-__hash_32_generic(u32 val)
+__khash_32_generic(u32 val)
 {
-	return val * GOLDEN_RATIO_32;
+	return val * KHASH_GOLDEN_RATIO_32;
 }
 
 #ifndef HAVE_ARCH_HASH_32
-#define hash_32 hash_32_generic
+#define khash_32 khash_32_generic
 #endif
 static inline u32
-hash_32_generic(u32 val, unsigned int bits)
+khash_32_generic(u32 val, unsigned int bits)
 {
 	/* High bits are more random, so use them. */
-	return __hash_32(val) >> (32 - bits);
+	return __khash_32(val) >> (32 - bits);
 }
 
 #ifndef HAVE_ARCH_HASH_64
-#define hash_64 hash_64_generic
+#define khash_64 khash_64_generic
 #endif
-static __always_inline u32
-hash_64_generic(u64 val, unsigned int bits)
+static __always_inline u64
+khash_64_generic(u64 val)
 {
 #if BITS_PER_LONG == 64
 	/* 64x64-bit multiply is efficient on all 64-bit processors */
-	return val * GOLDEN_RATIO_64 >> (64 - bits);
+	return val * KHASH_GOLDEN_RATIO_64;
 #else
 	/* Hash 64 bits using only 32x32-bit multiply. */
-	return hash_32((u32)val ^ __hash_32(val >> 32), bits);
-#endif
-}
-#endif
-
-__always_inline static u32
-hash_128(uint64_t _u64[2])
-{
-#if defined(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS) && BITS_PER_LONG == 64
-	unsigned long x = _u64[0] ^ _u64[1];
-
-	return (u32)(x ^ (x >> 32));
-#else
-	uint32_t *_u32 = (u32 *)_u64;
-	return (__force u32)(_u32[0] ^ _u32[1] ^ _u32[2] ^ _u32[3]);
+	return khash_32((u32)val ^ __khash_32(val >> 32), 0);
 #endif
 }
 
@@ -108,102 +93,59 @@ typedef struct {
 		u32 _32[2 * _64WORDS_NUM];
 		u64 _64[_64WORDS_NUM];
 	} __key;
-	u32 key;
+	u64 key;
 } khash_key_t;
 
-__always_inline static int
-khash_key_match(khash_key_t *a, khash_key_t *b)
+__always_inline static void
+__khash_key_hash(khash_key_t *key, u8 lkey)
 {
-	if (a->key == b->key)
-		return (!memcmp(a->__key._64, b->__key._64, _64WORDS_NUM));
+	int i;
 
-	return (0);
+	for (i = 0; i < lkey; i++)
+		key->key ^= khash_64(key->__key._64[i]);
 }
 
 __always_inline static khash_key_t *
-__khash_hash_u32(khash_key_t *key, u32 _u32)
+khash_hash_u32(khash_key_t *key, u32 _u32)
 {
 	memset(key, 0, sizeof(*key));
 
 	key->__key._64[0] = _u32;
-	key->key = hash_64(key->__key._64[0], 32);
+	__khash_key_hash(key, 1);
 
 	return (key);
 }
 
 __always_inline static khash_key_t *
-__khash_hash_u64(khash_key_t *key, u64 _u64)
+khash_hash_u64(khash_key_t *key, u64 _u64)
 {
 	memset(key, 0, sizeof(*key));
 
-	key->__key._64[0] = _u64;
-	key->key = hash_64(key->__key._64[0], 32);
+	memcpy(key->__key._64, &_u64, 8);
+	__khash_key_hash(key, 1);
 
 	return (key);
 }
 
 __always_inline static khash_key_t *
-__khash_hash_u128(khash_key_t *key, u64 _u64[2])
+khash_hash_u128(khash_key_t *key, u64 _u64[2])
 {
 	memset(key, 0, sizeof(*key));
 
 	memcpy(key->__key._64, _u64, 16);
-	key->key = hash_128(_u64);
+	__khash_key_hash(key, 2);
 
 	return (key);
 }
 
 __always_inline static khash_key_t *
-__khash_hash_u160(khash_key_t *key, u64 _u64[2], u32 _u32)
+khash_hash_u160(khash_key_t *key, u64 _u64[2], u32 _u32)
 {
-	u64 _key;
-
 	memset(key, 0, sizeof(*key));
 
-	memcpy(key->__key._64, _u64, 16);
+	memcpy(key->__key._64, _u64, 8);
 	key->__key._64[2] = _u32;
-
-	_key =(((u64)hash_128(_u64)) << 32) | _u32;
-
-	key->key = hash_64(_key, 32);
-
-	return (key);
-}
-
-__always_inline static khash_key_t *
-__khash_hash_aligned32(khash_key_t *key, u32 _u32[], int l_u32)
-{
-	key->key = jhash2(_u32, l_u32, JHASH_INITVAL);
-
-	return (key);
-}
-
-__always_inline static khash_key_t
-khash_hash_u32(uint32_t _u32)
-{
-	khash_key_t key = {};
-
-	__khash_hash_u32(&key, _u32);
-
-	return (key);
-}
-
-__always_inline static khash_key_t
-khash_hash_u64(uint64_t _u64)
-{
-	khash_key_t key = {};
-
-	__khash_hash_u64(&key, _u64);
-
-	return (key);
-}
-
-__always_inline static khash_key_t
-khash_hash_aligned32(u32 _u32[], int l_u32)
-{
-	khash_key_t key = {};
-
-	__khash_hash_aligned32(&key, _u32, l_u32);
+	__khash_key_hash(key, 3);
 
 	return (key);
 }
