@@ -31,9 +31,8 @@
 
 struct khash_t {
 	uint32_t          count;
-	uint8_t           ht_static_idx;
 	uint32_t          bck_num;
-	uint8_t           bits_num;
+	uint32_t          bits_num;  /* Keep structure 4 bytes alligned */
 	uint32_t          *ht_count; /* Array of bck_size length */
 	struct hlist_head *ht;       /* Array of bck_size length */
 };
